@@ -240,26 +240,64 @@ async function onBarcode() {
   $('qty').focus();
 }
 
-// Looks a barcode up in Open Food Facts (free, no key). Returns a name or ''.
+// Looks a barcode up in Open Food Facts (free, no key) and builds a DESCRIPTIVE
+// name including brand + product + size + can/bottle when available.
+// e.g. "Coca-Cola Original Taste 33cl Can". Returns '' if not found.
 async function lookupOpenFoodFacts(code) {
   try {
     const res = await fetch(
       `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json` +
-      `?fields=product_name,product_name_en,product_name_fr,brands`,
+      `?fields=product_name,product_name_en,product_name_fr,brands,quantity,` +
+      `product_quantity,product_quantity_unit,packaging`,
       { headers: { 'Accept': 'application/json' } }
     );
     if (!res.ok) return '';
     const data = await res.json();
     if (data.status !== 1 || !data.product) return '';
     const p = data.product;
-    let name = p.product_name_en || p.product_name || p.product_name_fr || '';
-    name = String(name).trim();
+
+    let name = String(p.product_name_en || p.product_name || p.product_name_fr || '').trim();
     if (!name) return '';
-    // Prefix the brand if it isn't already part of the name (e.g. "Coca-Cola").
+
+    // Prefix the brand if it isn't already part of the name.
     const brand = (p.brands || '').split(',')[0].trim();
     if (brand && !name.toLowerCase().includes(brand.toLowerCase())) name = brand + ' ' + name;
-    return name;
+
+    // Append the size (e.g. "33cl", "1L") if it's not already in the name.
+    const size = formatSize(p);
+    if (size && !name.toLowerCase().replace(/\s/g, '').includes(size.toLowerCase().replace(/\s/g, ''))) {
+      name += ' ' + size;
+    }
+
+    // Append the container type (Can / Bottle) when the packaging field makes it clear.
+    const container = detectContainer(p.packaging);
+    if (container && !name.toLowerCase().includes(container.toLowerCase())) name += ' ' + container;
+
+    return name.replace(/\s+/g, ' ').trim();
   } catch (e) { return ''; }
+}
+
+// Builds a clean size label from the structured fields, falling back to the raw text.
+function formatSize(p) {
+  const ml = Number(p.product_quantity);
+  const unit = String(p.product_quantity_unit || '').toLowerCase();
+  if (ml > 0 && (unit === 'ml' || unit === 'g' || !unit)) {
+    if (unit !== 'g' && ml >= 1000 && ml % 100 === 0) return (ml / 1000) + 'L';   // 1000 -> 1L
+    if (unit !== 'g' && ml % 10 === 0 && ml < 1000)   return (ml / 10) + 'cl';     // 330  -> 33cl
+    return ml + (unit || 'ml');
+  }
+  // Fall back to the human "quantity" string, tidied up ("33 cl" -> "33cl").
+  const q = String(p.quantity || '').trim().replace(/\s+/g, '');
+  return q || '';
+}
+
+// Best-effort can/bottle detection from the messy, multilingual packaging field.
+function detectContainer(packaging) {
+  const s = String(packaging || '').toLowerCase();
+  if (!s) return '';
+  if (/\bcan\b|canette|lata|lattina|dose|drink can/.test(s)) return 'Can';
+  if (/bottle|bouteille|botella|bottiglia|pet|garrafa/.test(s)) return 'Bottle';
+  return '';
 }
 
 $('barcode').addEventListener('keydown', e => {
