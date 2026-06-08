@@ -217,12 +217,44 @@ async function onBarcode() {
     if (r.ok && r.known) {
       $('name').value = r.name;
       $('nameHint').textContent = '✓ Known item';
-    } else {
-      $('nameHint').textContent = 'New barcode — type a name to register it.';
-      $('name').focus();
+      $('qty').focus();
+      return;
     }
-  } catch (e) { $('nameHint').textContent = ''; }
+  } catch (e) { /* fall through to global lookup */ }
+
+  // Not in your Items tab — try the free Open Food Facts global database.
+  $('nameHint').textContent = 'New barcode — checking product database…';
+  const globalName = await lookupOpenFoodFacts(code);
+  if (globalName) {
+    $('name').value = globalName;
+    $('nameHint').textContent = '🌐 Found online — check the name, then save (it’ll be remembered).';
+  } else {
+    $('nameHint').textContent = 'New barcode — type a name to register it.';
+    $('name').focus();
+  }
   $('qty').focus();
+}
+
+// Looks a barcode up in Open Food Facts (free, no key). Returns a name or ''.
+async function lookupOpenFoodFacts(code) {
+  try {
+    const res = await fetch(
+      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json` +
+      `?fields=product_name,product_name_en,product_name_fr,brands`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (!res.ok) return '';
+    const data = await res.json();
+    if (data.status !== 1 || !data.product) return '';
+    const p = data.product;
+    let name = p.product_name_en || p.product_name || p.product_name_fr || '';
+    name = String(name).trim();
+    if (!name) return '';
+    // Prefix the brand if it isn't already part of the name (e.g. "Coca-Cola").
+    const brand = (p.brands || '').split(',')[0].trim();
+    if (brand && !name.toLowerCase().includes(brand.toLowerCase())) name = brand + ' ' + name;
+    return name;
+  } catch (e) { return ''; }
 }
 
 $('barcode').addEventListener('keydown', e => {
