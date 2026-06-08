@@ -67,6 +67,8 @@
   td.qty { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
   .low { color: var(--out); }
   .setup-needed { background: #8f3835; color: #fff; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  label.nobc { display: flex; align-items: center; gap: 9px; font-size: 15px; color: var(--text); margin: 0 0 4px; cursor: pointer; }
+  label.nobc input { width: auto; }
 </style>
 </head>
 <body>
@@ -93,16 +95,30 @@
 </div>
 
 <div class="card">
-  <label>Barcode</label>
-  <div class="scanbar">
-    <div>
-      <input id="barcode" inputmode="numeric" autocomplete="off"
-             placeholder="Scan or type, then Enter" />
+  <label class="nobc">
+    <input type="checkbox" id="noBarcode" onchange="toggleNoBarcode()" />
+    This product has no barcode
+  </label>
+
+  <!-- Barcode mode -->
+  <div id="bcWrap">
+    <label>Barcode</label>
+    <div class="scanbar">
+      <div>
+        <input id="barcode" inputmode="numeric" autocomplete="off"
+               placeholder="Scan or type, then Enter" />
+      </div>
+      <button class="iconbtn" id="camBtn" onclick="toggleCam()">📷 Camera</button>
     </div>
-    <button class="iconbtn" id="camBtn" onclick="toggleCam()">📷 Camera</button>
+    <div id="camWrap"><video id="video" playsinline muted></video>
+      <div class="hint">Point the camera at the barcode. It fills in automatically.</div>
+    </div>
   </div>
-  <div id="camWrap"><video id="video" playsinline muted></video>
-    <div class="hint">Point the camera at the barcode. It fills in automatically.</div>
+
+  <!-- No-barcode mode: pick a known item or add a new one -->
+  <div id="pickWrap" style="display:none">
+    <label>Item (pick existing, or choose “➕ New item…”)</label>
+    <select id="itemPicker" onchange="onPickItem()"></select>
   </div>
 
   <label>Item name</label>
@@ -186,8 +202,52 @@ async function bootstrap() {
     fillSelect($('warehouse'), data.warehouses);
     fillSelect($('destination'), data.destinations);
     fillSelect($('unit'), (data.units && data.units.length) ? data.units : ['Single']);
+    KNOWN_ITEMS = data.items || [];
+    fillItemPicker();
     renderStock(data.stock);
   } catch (e) { toast('Cannot reach the sheet. Check API_URL.', 'err'); }
+}
+
+let KNOWN_ITEMS = [];
+
+// Fills the no-barcode picker: every known item plus a "New item…" option.
+function fillItemPicker() {
+  const sel = $('itemPicker');
+  sel.innerHTML = '';
+  const add = (val, label) => {
+    const o = document.createElement('option'); o.value = val; o.textContent = label; sel.appendChild(o);
+  };
+  add('__new__', '➕ New item…');
+  KNOWN_ITEMS.forEach(it => add(it.name, it.name));
+}
+
+// Switches between barcode and no-barcode input modes.
+function toggleNoBarcode() {
+  const off = $('noBarcode').checked;
+  $('bcWrap').style.display = off ? 'none' : 'block';
+  $('pickWrap').style.display = off ? 'block' : 'none';
+  if (off) {
+    stopCam();
+    $('barcode').value = '';
+    onPickItem();              // sync the name box to the current pick
+  } else {
+    $('name').value = '';
+    $('nameHint').textContent = '';
+  }
+}
+
+// When a known item is picked, fill the name; "New item…" clears it for typing.
+function onPickItem() {
+  const v = $('itemPicker').value;
+  if (v === '__new__') {
+    $('name').value = '';
+    $('nameHint').textContent = 'Type the new item name, then set quantity.';
+    $('name').focus();
+  } else {
+    $('name').value = v;
+    $('nameHint').textContent = '✓ Known item (no barcode)';
+    $('qty').focus();
+  }
 }
 
 function fillSelect(sel, items) {
@@ -336,14 +396,22 @@ function stopCam() {
 // ---- submit ----
 async function submit() {
   if (Date.now() - lastSubmit < 800) return; // guard against double-tap / double-scan
-  const barcode = $('barcode').value.trim();
+  const noBarcode = $('noBarcode').checked;
   const name = $('name').value.trim();
   const unit = $('unit').value || 'Single';
   const qty = Number($('qty').value);
   const warehouse = $('warehouse').value;
   const destination = $('destination').value;
 
-  if (!barcode) return toast('Scan or enter a barcode.', 'err');
+  // For no-barcode items, the stable key is the name itself (prefixed so it never
+  // collides with a real numeric barcode), so repeat entries sum together.
+  const barcode = noBarcode ? ('NB:' + name.toLowerCase()) : $('barcode').value.trim();
+
+  if (noBarcode) {
+    if (!name) return toast('Enter or pick an item name.', 'err');
+  } else {
+    if (!barcode) return toast('Scan or enter a barcode.', 'err');
+  }
   if (!qty || qty <= 0) return toast('Enter a quantity.', 'err');
   if (!warehouse) return toast('Pick a warehouse.', 'err');
   if (MODE === 'OUT' && !destination) return toast('Pick a destination.', 'err');
@@ -355,10 +423,17 @@ async function submit() {
     if (r.ok) {
       toast(`${MODE === 'IN' ? '＋' : '－'}${qty} ${r.name} (${r.unit}) → ${r.onHand} on hand`, 'ok');
       if (navigator.vibrate) navigator.vibrate(40);
-      // Reset for the next scan; keep warehouse selected for speed.
-      $('barcode').value = ''; $('name').value = ''; $('qty').value = '';
+      // Remember a new no-barcode item locally so it appears in the picker right away.
+      if (noBarcode && !KNOWN_ITEMS.some(it => it.name.toLowerCase() === name.toLowerCase())) {
+        KNOWN_ITEMS.push({ barcode: barcode, name: name });
+        KNOWN_ITEMS.sort((a, b) => a.name.localeCompare(b.name));
+        fillItemPicker();
+      }
+      // Reset for the next entry; keep warehouse + no-barcode mode for speed.
+      $('barcode').value = ''; $('qty').value = '';
+      if (noBarcode) { $('itemPicker').value = '__new__'; $('name').value = ''; }
+      else { $('name').value = ''; $('barcode').focus(); }
       $('nameHint').textContent = '';
-      $('barcode').focus();
     } else {
       toast(r.error || 'Failed to record.', 'err');
     }

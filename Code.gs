@@ -70,6 +70,7 @@ function bootstrap_() {
     warehouses: readColumn_(SHEETS.warehouses),
     destinations: readColumn_(SHEETS.destinations),
     units: readColumn_(SHEETS.units),
+    items: readItems_(),
     stock: readStock_()
   };
 }
@@ -191,6 +192,20 @@ function readStock_() {
            a.warehouse.localeCompare(b.warehouse) ||
            a.unit.localeCompare(b.unit);
   });
+  return out;
+}
+
+/** Returns the known-items catalog as [{barcode, name}], used by the no-barcode picker. */
+function readItems_() {
+  var sheet = getSheet_(SHEETS.items);
+  var values = sheet.getDataRange().getValues(); // [Barcode, Item Name]
+  var out = [];
+  for (var i = 1; i < values.length; i++) {
+    var code = String(values[i][0]).trim();
+    var name = String(values[i][1]).trim();
+    if (name) out.push({ barcode: code, name: name });
+  }
+  out.sort(function (a, b) { return a.name.localeCompare(b.name); });
   return out;
 }
 
