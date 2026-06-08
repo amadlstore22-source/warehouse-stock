@@ -109,6 +109,9 @@
   <input id="name" placeholder="Auto-fills for known items; type for new ones" autocomplete="off" />
   <div class="hint" id="nameHint"></div>
 
+  <label>Packaging / unit</label>
+  <select id="unit"></select>
+
   <div class="row">
     <div>
       <label>Quantity</label>
@@ -131,7 +134,7 @@
 <details>
   <summary>📊 Current stock</summary>
   <table id="stockTable"><thead>
-    <tr><th>Item</th><th>Warehouse</th><th class="qty">On hand</th></tr>
+    <tr><th>Item</th><th>Unit</th><th>Warehouse</th><th class="qty">On hand</th></tr>
   </thead><tbody></tbody></table>
   <div class="hint">Tap “Current stock” again to refresh after a scan.</div>
 </details>
@@ -182,6 +185,7 @@ async function bootstrap() {
     if (!data.ok) { toast(data.error || 'Load failed', 'err'); return; }
     fillSelect($('warehouse'), data.warehouses);
     fillSelect($('destination'), data.destinations);
+    fillSelect($('unit'), (data.units && data.units.length) ? data.units : ['Single']);
     renderStock(data.stock);
   } catch (e) { toast('Cannot reach the sheet. Check API_URL.', 'err'); }
 }
@@ -199,7 +203,8 @@ function renderStock(rows) {
   (rows || []).forEach(r => {
     const tr = document.createElement('tr');
     const low = r.qty <= 0 ? ' low' : '';
-    tr.innerHTML = `<td>${esc(r.name)}</td><td>${esc(r.warehouse)}</td>` +
+    tr.innerHTML = `<td>${esc(r.name)}</td><td>${esc(r.unit || 'Single')}</td>` +
+                   `<td>${esc(r.warehouse)}</td>` +
                    `<td class="qty${low}">${r.qty}</td>`;
     body.appendChild(tr);
   });
@@ -295,6 +300,7 @@ async function submit() {
   if (Date.now() - lastSubmit < 800) return; // guard against double-tap / double-scan
   const barcode = $('barcode').value.trim();
   const name = $('name').value.trim();
+  const unit = $('unit').value || 'Single';
   const qty = Number($('qty').value);
   const warehouse = $('warehouse').value;
   const destination = $('destination').value;
@@ -307,9 +313,9 @@ async function submit() {
   lastSubmit = Date.now();
   $('submit').disabled = true;
   try {
-    const r = await api({ action: 'record', type: MODE, barcode, name, quantity: qty, warehouse, destination });
+    const r = await api({ action: 'record', type: MODE, barcode, name, unit, quantity: qty, warehouse, destination });
     if (r.ok) {
-      toast(`${MODE === 'IN' ? '＋' : '－'}${qty} ${r.name} → ${r.onHand} on hand`, 'ok');
+      toast(`${MODE === 'IN' ? '＋' : '－'}${qty} ${r.name} (${r.unit}) → ${r.onHand} on hand`, 'ok');
       if (navigator.vibrate) navigator.vibrate(40);
       // Reset for the next scan; keep warehouse selected for speed.
       $('barcode').value = ''; $('name').value = ''; $('qty').value = '';

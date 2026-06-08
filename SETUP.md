@@ -54,10 +54,15 @@ You'll do this once. Takes ~15 minutes. No coding required — just copy, paste,
 ## Part 4 — Fill in your warehouses and destinations
 
 12. Click the **Warehouses** tab. Under the "Warehouse" header, type your real
-    warehouse names, one per row (replace the `Main Warehouse` starter).
-13. Click the **Destinations** tab. List where stock goes when it leaves (shops,
-    clients, other warehouses), one per row.
-14. *(Optional — your existing item list)* Click the **Items** tab. Paste your
+    warehouse names, one per row (e.g. `Main Warehouse`, `India`). Add as many as
+    you like, anytime — the app picks them up next time it loads.
+13. Click the **Destinations** tab. List where stock goes when it leaves
+    (`Shop 1`, `Shop 2`, `Shop 3`, clients, other warehouses), one per row. Edit
+    or add to this whenever you want.
+14. Click the **Units** tab. These are the packaging options shown when scanning
+    (`Single`, `Packet of 12`, `Box of 6`, …). Add/edit your own. Stock is tracked
+    **separately per unit**, so 5 "Packet of 12" and 40 "Single" stay distinct.
+15. *(Optional — your existing item list)* Click the **Items** tab. Paste your
     barcodes in column A and item names in column B. Unknown barcodes will still
     prompt for a name on first scan, so this is optional.
 

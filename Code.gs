@@ -24,6 +24,7 @@ var SHEETS = {
   items: 'Items',
   warehouses: 'Warehouses',
   destinations: 'Destinations',
+  units: 'Units',
   stock: 'Stock'
 };
 
@@ -68,6 +69,7 @@ function bootstrap_() {
     ok: true,
     warehouses: readColumn_(SHEETS.warehouses),
     destinations: readColumn_(SHEETS.destinations),
+    units: readColumn_(SHEETS.units),
     stock: readStock_()
   };
 }
@@ -97,6 +99,7 @@ function record_(p) {
 
   var barcode = String(p.barcode || '').trim();
   var name = String(p.name || '').trim();
+  var unit = String(p.unit || '').trim() || 'Single'; // packaging, e.g. "Packet of 12"
   var qty = Number(p.quantity);
   var warehouse = String(p.warehouse || '').trim();
   var destination = String(p.destination || '').trim();
@@ -118,20 +121,21 @@ function record_(p) {
 
   var sheet = getSheet_(SHEETS.movements);
   sheet.appendRow([
-    new Date(),                 // Timestamp
-    type,                       // IN / OUT
-    barcode,                    // Barcode
-    name,                       // Item Name
-    qty,                        // Quantity (always positive, human-readable)
-    signed,                     // Signed Qty (for the running total)
-    warehouse,                  // Warehouse
-    (type === 'OUT' ? destination : ''), // Destination
-    (p.note || '')              // Optional note
+    new Date(),                 // Timestamp        col A
+    type,                       // IN / OUT         col B
+    barcode,                    // Barcode          col C
+    name,                       // Item Name        col D
+    unit,                       // Unit/packaging   col E
+    qty,                        // Quantity         col F
+    signed,                     // Signed Qty       col G  (running total)
+    warehouse,                  // Warehouse        col H
+    (type === 'OUT' ? destination : ''), // Destination col I
+    (p.note || '')              // Optional note    col J
   ]);
 
-  // Compute the new on-hand for this item at this warehouse so the app can confirm it.
-  var onHand = stockFor_(barcode, warehouse);
-  return { ok: true, barcode: barcode, name: name, warehouse: warehouse, onHand: onHand };
+  // Compute the new on-hand for this item+unit at this warehouse so the app can confirm it.
+  var onHand = stockFor_(barcode, warehouse, unit);
+  return { ok: true, barcode: barcode, name: name, unit: unit, warehouse: warehouse, onHand: onHand };
 }
 
 /* ----------------------------- helpers ----------------------------- */
@@ -148,38 +152,44 @@ function rememberItem_(barcode, name) {
   sheet.appendRow([barcode, name]);
 }
 
-/** Sums signed quantities for one barcode at one warehouse. */
-function stockFor_(barcode, warehouse) {
+/** Sums signed quantities for one barcode + unit at one warehouse.
+ *  Column indices: C=2 barcode, E=4 unit, G=6 signed qty, H=7 warehouse. */
+function stockFor_(barcode, warehouse, unit) {
   var sheet = getSheet_(SHEETS.movements);
   var values = sheet.getDataRange().getValues(); // header in row 1
   var total = 0;
   for (var i = 1; i < values.length; i++) {
-    if (String(values[i][2]).trim() === barcode && String(values[i][6]).trim() === warehouse) {
-      total += Number(values[i][5]) || 0;
+    if (String(values[i][2]).trim() === barcode &&
+        String(values[i][7]).trim() === warehouse &&
+        String(values[i][4]).trim() === unit) {
+      total += Number(values[i][6]) || 0;
     }
   }
   return total;
 }
 
-/** Builds the full stock table grouped by barcode + warehouse. */
+/** Builds the full stock table grouped by barcode + warehouse + unit. */
 function readStock_() {
   var sheet = getSheet_(SHEETS.movements);
   var values = sheet.getDataRange().getValues();
-  var map = {}; // key = barcode||warehouse
+  var map = {}; // key = barcode||warehouse||unit
   for (var i = 1; i < values.length; i++) {
     var barcode = String(values[i][2]).trim();
     var name = String(values[i][3]).trim();
-    var warehouse = String(values[i][6]).trim();
+    var unit = String(values[i][4]).trim() || 'Single';
+    var warehouse = String(values[i][7]).trim();
     if (!barcode || !warehouse) continue;
-    var key = barcode + '||' + warehouse;
-    if (!map[key]) map[key] = { barcode: barcode, name: name, warehouse: warehouse, qty: 0 };
-    map[key].qty += Number(values[i][5]) || 0;
+    var key = barcode + '||' + warehouse + '||' + unit;
+    if (!map[key]) map[key] = { barcode: barcode, name: name, unit: unit, warehouse: warehouse, qty: 0 };
+    map[key].qty += Number(values[i][6]) || 0;
     if (name) map[key].name = name;
   }
   var out = [];
   for (var k in map) out.push(map[k]);
   out.sort(function (a, b) {
-    return a.name.localeCompare(b.name) || a.warehouse.localeCompare(b.warehouse);
+    return a.name.localeCompare(b.name) ||
+           a.warehouse.localeCompare(b.warehouse) ||
+           a.unit.localeCompare(b.unit);
   });
   return out;
 }
@@ -215,13 +225,28 @@ function json_(obj) {
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
+  var HEADERS = ['Timestamp', 'Type', 'Barcode', 'Item Name', 'Unit',
+    'Quantity', 'Signed Qty', 'Warehouse', 'Destination', 'Note'];
+
   var movements = getSheet_(SHEETS.movements);
   if (movements.getLastRow() === 0) {
-    movements.appendRow(['Timestamp', 'Type', 'Barcode', 'Item Name',
-      'Quantity', 'Signed Qty', 'Warehouse', 'Destination', 'Note']);
-    movements.getRange('A1:I1').setFontWeight('bold');
-    movements.setFrozenRows(1);
+    movements.appendRow(HEADERS);
+  } else {
+    // Migrate an OLDER sheet that has no 'Unit' column: insert it after 'Item Name' (col D).
+    var firstRow = movements.getRange(1, 1, 1, movements.getLastColumn()).getValues()[0];
+    if (firstRow.indexOf('Unit') === -1) {
+      movements.insertColumnAfter(4);              // new blank column E
+      movements.getRange(1, 5).setValue('Unit');   // header
+      var rows = movements.getLastRow() - 1;
+      if (rows > 0) movements.getRange(2, 5, rows, 1).setValue('Single'); // backfill existing
+      SpreadsheetApp.getActiveSpreadsheet()
+        .toast('Migrated Movements: added Unit column (existing rows set to "Single").', 'Warehouse Stock', 6);
+    }
   }
+  movements.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
+  movements.setFrozenRows(1);
+  // Make the Timestamp column show both date and time clearly.
+  movements.getRange('A2:A').setNumberFormat('yyyy-mm-dd hh:mm:ss');
 
   var items = getSheet_(SHEETS.items);
   if (items.getLastRow() === 0) {
@@ -242,21 +267,33 @@ function setup() {
   if (destinations.getLastRow() === 0) {
     destinations.appendRow(['Destination']);
     destinations.getRange('A1').setFontWeight('bold');
-    destinations.appendRow(['Shop A']);
-    destinations.appendRow(['Client B']);
+    destinations.appendRow(['Shop 1']);
+    destinations.appendRow(['Shop 2']);
+    destinations.appendRow(['Shop 3']);
     destinations.setFrozenRows(1);
   }
 
+  // Units / packaging — you edit this list yourself, like warehouses & destinations.
+  var units = getSheet_(SHEETS.units);
+  if (units.getLastRow() === 0) {
+    units.appendRow(['Unit']);
+    units.getRange('A1').setFontWeight('bold');
+    ['Single', 'Packet of 6', 'Packet of 12', 'Box of 6', 'Box of 12']
+      .forEach(function (u) { units.appendRow([u]); });
+    units.setFrozenRows(1);
+  }
+
   // Live stock view driven by a formula, so you can glance at the sheet too.
+  // Columns now: C=Barcode, D=Item Name, E=Unit, G=Signed Qty, H=Warehouse.
   var stock = getSheet_(SHEETS.stock);
   stock.clear();
-  stock.appendRow(['Item Name', 'Barcode', 'Warehouse', 'On Hand']);
-  stock.getRange('A1:D1').setFontWeight('bold');
+  stock.appendRow(['Item Name', 'Barcode', 'Unit', 'Warehouse', 'On Hand']);
+  stock.getRange('A1:E1').setFontWeight('bold');
   stock.setFrozenRows(1);
-  // QUERY pivots the Movements log into per-item, per-warehouse totals.
+  // QUERY pivots the Movements log into per-item, per-unit, per-warehouse totals.
   stock.getRange('A2').setFormula(
-    "=IFERROR(QUERY(Movements!C2:G, " +
-    "\"select D, C, G, sum(F) where C is not null group by D, C, G label sum(F) ''\", 0), )"
+    "=IFERROR(QUERY(Movements!C2:H, " +
+    "\"select D, C, E, H, sum(G) where C is not null group by D, C, E, H label sum(G) ''\", 0), )"
   );
 
   SpreadsheetApp.getActiveSpreadsheet().toast('Setup complete — all tabs created.', 'Warehouse Stock', 5);
