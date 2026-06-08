@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Warehouse Stock Scanner</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #1a1d24; --line: #2a2e38;
+    --text: #e8eaed; --muted: #9aa0aa;
+    --in: #2e9e5b; --in-dim: #1f6b3e;
+    --out: #d9534f; --out-dim: #8f3835;
+    --accent: #3b82f6;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text); padding: 16px; max-width: 560px; margin: 0 auto;
+  }
+  h1 { font-size: 20px; margin: 4px 0 16px; }
+  .modes { display: flex; gap: 8px; margin-bottom: 16px; }
+  .modes button {
+    flex: 1; padding: 14px; font-size: 16px; font-weight: 700; border: 2px solid var(--line);
+    border-radius: 12px; background: var(--card); color: var(--muted); cursor: pointer;
+  }
+  .modes button.active-in  { border-color: var(--in);  background: var(--in-dim);  color: #fff; }
+  .modes button.active-out { border-color: var(--out); background: var(--out-dim); color: #fff; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 5px; }
+  input, select {
+    width: 100%; padding: 13px; font-size: 17px; border-radius: 10px;
+    border: 1px solid var(--line); background: #11141a; color: var(--text);
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .scanbar { display: flex; gap: 8px; align-items: flex-end; }
+  .scanbar > div { flex: 1; }
+  .iconbtn {
+    padding: 13px 14px; border-radius: 10px; border: 1px solid var(--line);
+    background: #11141a; color: var(--text); font-size: 16px; cursor: pointer; white-space: nowrap;
+  }
+  #submit {
+    width: 100%; padding: 16px; font-size: 18px; font-weight: 800; border: none;
+    border-radius: 12px; color: #fff; cursor: pointer; margin-top: 8px;
+  }
+  #submit.in  { background: var(--in); }
+  #submit.out { background: var(--out); }
+  #submit:disabled { opacity: .5; }
+  #camWrap { display: none; margin-top: 12px; }
+  #video { width: 100%; border-radius: 12px; background: #000; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    background: #fff; color: #111; padding: 12px 18px; border-radius: 10px; font-weight: 600;
+    box-shadow: 0 6px 24px rgba(0,0,0,.4); opacity: 0; transition: opacity .2s; pointer-events: none;
+    max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+  .toast.ok  { background: #1f6b3e; color: #fff; }
+  .toast.err { background: #8f3835; color: #fff; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td.qty { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .low { color: var(--out); }
+  .setup-needed { background: #8f3835; color: #fff; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<!--
+  ============================================================
+  SET THESE TWO VALUES (instructions are in SETUP.md)
+  ============================================================
+-->
+<script>
+  const API_URL   = 'PASTE_YOUR_WEB_APP_URL_HERE';
+  const API_TOKEN = 'CHANGE-ME-to-a-random-string'; // must match Code.gs
+</script>
+
+<h1>📦 Warehouse Stock</h1>
+
+<div id="setupWarn" class="setup-needed" style="display:none">
+  ⚠️ Not configured yet. Open this file and set <b>API_URL</b> and <b>API_TOKEN</b> (see SETUP.md).
+</div>
+
+<div class="modes">
+  <button id="modeIn"  class="active-in"  onclick="setMode('IN')">⬇️ Stock IN</button>
+  <button id="modeOut" onclick="setMode('OUT')">⬆️ Stock OUT</button>
+</div>
+
+<div class="card">
+  <label>Barcode</label>
+  <div class="scanbar">
+    <div>
+      <input id="barcode" inputmode="numeric" autocomplete="off"
+             placeholder="Scan or type, then Enter" />
+    </div>
+    <button class="iconbtn" id="camBtn" onclick="toggleCam()">📷 Camera</button>
+  </div>
+  <div id="camWrap"><video id="video" playsinline muted></video>
+    <div class="hint">Point the camera at the barcode. It fills in automatically.</div>
+  </div>
+
+  <label>Item name</label>
+  <input id="name" placeholder="Auto-fills for known items; type for new ones" autocomplete="off" />
+  <div class="hint" id="nameHint"></div>
+
+  <div class="row">
+    <div>
+      <label>Quantity</label>
+      <input id="qty" inputmode="numeric" type="number" min="1" step="1" placeholder="e.g. 24" />
+    </div>
+    <div>
+      <label>Warehouse</label>
+      <select id="warehouse"></select>
+    </div>
+  </div>
+
+  <div id="destWrap" style="display:none">
+    <label>Destination (where it's going)</label>
+    <select id="destination"></select>
+  </div>
+
+  <button id="submit" class="in" onclick="submit()">Record Stock IN</button>
+</div>
+
+<details>
+  <summary>📊 Current stock</summary>
+  <table id="stockTable"><thead>
+    <tr><th>Item</th><th>Warehouse</th><th class="qty">On hand</th></tr>
+  </thead><tbody></tbody></table>
+  <div class="hint">Tap “Current stock” again to refresh after a scan.</div>
+</details>
+
+<div class="toast" id="toast"></div>
+
+<!-- Barcode scanning library (camera). Loaded from CDN; the typed/hardware path works without it. -->
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+let MODE = 'IN';
+let lastSubmit = 0;
+
+const $ = id => document.getElementById(id);
+
+function toast(msg, kind) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + (kind || '');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => { t.className = 'toast'; }, 2600);
+}
+
+function setMode(mode) {
+  MODE = mode;
+  const inB = $('modeIn'), outB = $('modeOut'), sub = $('submit');
+  inB.className  = mode === 'IN'  ? 'active-in'  : '';
+  outB.className = mode === 'OUT' ? 'active-out' : '';
+  $('destWrap').style.display = mode === 'OUT' ? 'block' : 'none';
+  sub.className = mode === 'IN' ? 'in' : 'out';
+  sub.textContent = 'Record Stock ' + mode;
+}
+
+// ---- talk to Apps Script ----
+async function api(payload) {
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    // text/plain avoids a CORS preflight that Apps Script can't answer.
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ token: API_TOKEN, ...payload })
+  });
+  return res.json();
+}
+
+async function bootstrap() {
+  if (API_URL.startsWith('PASTE_')) { $('setupWarn').style.display = 'block'; return; }
+  try {
+    const data = await api({ action: 'bootstrap' });
+    if (!data.ok) { toast(data.error || 'Load failed', 'err'); return; }
+    fillSelect($('warehouse'), data.warehouses);
+    fillSelect($('destination'), data.destinations);
+    renderStock(data.stock);
+  } catch (e) { toast('Cannot reach the sheet. Check API_URL.', 'err'); }
+}
+
+function fillSelect(sel, items) {
+  sel.innerHTML = '';
+  (items || []).forEach(v => {
+    const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o);
+  });
+}
+
+function renderStock(rows) {
+  const body = $('stockTable').querySelector('tbody');
+  body.innerHTML = '';
+  (rows || []).forEach(r => {
+    const tr = document.createElement('tr');
+    const low = r.qty <= 0 ? ' low' : '';
+    tr.innerHTML = `<td>${esc(r.name)}</td><td>${esc(r.warehouse)}</td>` +
+                   `<td class="qty${low}">${r.qty}</td>`;
+    body.appendChild(tr);
+  });
+}
+function esc(s){ return String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+
+// ---- barcode lookup (after a scan or typing + Enter) ----
+let lookupTimer;
+async function onBarcode() {
+  const code = $('barcode').value.trim();
+  if (!code) return;
+  $('nameHint').textContent = 'Looking up…';
+  try {
+    const r = await api({ action: 'lookup', barcode: code });
+    if (r.ok && r.known) {
+      $('name').value = r.name;
+      $('nameHint').textContent = '✓ Known item';
+    } else {
+      $('nameHint').textContent = 'New barcode — type a name to register it.';
+      $('name').focus();
+    }
+  } catch (e) { $('nameHint').textContent = ''; }
+  $('qty').focus();
+}
+
+$('barcode').addEventListener('keydown', e => {
+  // Hardware scanners send the barcode then an Enter keystroke.
+  if (e.key === 'Enter') { e.preventDefault(); onBarcode(); }
+});
+$('barcode').addEventListener('blur', onBarcode);
+
+// ---- camera scanning ----
+let codeReader, scanning = false;
+async function toggleCam() {
+  if (scanning) { stopCam(); return; }
+  if (!window.ZXing) { toast('Camera library not loaded (no internet?)', 'err'); return; }
+  try {
+    codeReader = new ZXing.BrowserMultiFormatReader();
+    $('camWrap').style.display = 'block';
+    $('camBtn').textContent = '✕ Close';
+    scanning = true;
+    await codeReader.decodeFromVideoDevice(null, 'video', (result) => {
+      if (result) {
+        $('barcode').value = result.getText();
+        if (navigator.vibrate) navigator.vibrate(60);
+        stopCam();
+        onBarcode();
+      }
+    });
+  } catch (e) { toast('Camera unavailable. Use a scanner or type.', 'err'); stopCam(); }
+}
+function stopCam() {
+  scanning = false;
+  if (codeReader) { try { codeReader.reset(); } catch (e) {} }
+  $('camWrap').style.display = 'none';
+  $('camBtn').textContent = '📷 Camera';
+}
+
+// ---- submit ----
+async function submit() {
+  if (Date.now() - lastSubmit < 800) return; // guard against double-tap / double-scan
+  const barcode = $('barcode').value.trim();
+  const name = $('name').value.trim();
+  const qty = Number($('qty').value);
+  const warehouse = $('warehouse').value;
+  const destination = $('destination').value;
+
+  if (!barcode) return toast('Scan or enter a barcode.', 'err');
+  if (!qty || qty <= 0) return toast('Enter a quantity.', 'err');
+  if (!warehouse) return toast('Pick a warehouse.', 'err');
+  if (MODE === 'OUT' && !destination) return toast('Pick a destination.', 'err');
+
+  lastSubmit = Date.now();
+  $('submit').disabled = true;
+  try {
+    const r = await api({ action: 'record', type: MODE, barcode, name, quantity: qty, warehouse, destination });
+    if (r.ok) {
+      toast(`${MODE === 'IN' ? '＋' : '－'}${qty} ${r.name} → ${r.onHand} on hand`, 'ok');
+      if (navigator.vibrate) navigator.vibrate(40);
+      // Reset for the next scan; keep warehouse selected for speed.
+      $('barcode').value = ''; $('name').value = ''; $('qty').value = '';
+      $('nameHint').textContent = '';
+      $('barcode').focus();
+    } else {
+      toast(r.error || 'Failed to record.', 'err');
+    }
+  } catch (e) {
+    toast('Network error — not recorded. Try again.', 'err');
+  } finally {
+    $('submit').disabled = false;
+  }
+}
+
+// Refresh stock when the section is opened.
+document.querySelector('details').addEventListener('toggle', e => { if (e.target.open) bootstrap(); });
+
+setMode('IN');
+bootstrap();
+</script>
+</body>
+</html>
